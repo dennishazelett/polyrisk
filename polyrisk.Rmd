@@ -1,0 +1,312 @@
+---
+title: "Modeling Polygenic Risk"
+author:
+  Dennis J. Hazelett & Simon G. Coetzee
+output: 
+  html_notebook:
+    toc: TRUE
+    theme: united
+    highlight: textmate
+    toc_float: TRUE
+---
+
+This is a summary of some code I wrote to explore polygenic risk based on [genome-wide association studies](https://www.genome.gov/20019523/) (GWAS). GWAS data are freely available, albeit in summary form, from the [gwas catalog](https://www.ebi.ac.uk/gwas/). The goal was to get a deeper understanding of the parameters that shape polygenic risk, and to attempt a rudimentary model with Bayesian [maximum likelihood estimation](https://en.wikipedia.org/wiki/Maximum_likelihood_estimation) (MLE) using [stan](http://mc-stan.org/).
+
+# Generating fake patient data (Hardy-Weinberg)
+
+Generation of fake patient data (i.e. simulation of) is pretty easy. Human variation is codified as "single nucleotide polymorphisms" (alternatively "simple nuc poly") or [SNPs](https://en.wikipedia.org/wiki/Single-nucleotide_polymorphism). First let's create some functions to simulate genotypes based on SNP frequency. This is based on the [Hardy-Weinberg equilibrium](https://en.wikipedia.org/wiki/Hardy%E2%80%93Weinberg_principle) We can add risk effects later.
+
+```{r msg = FALSE}
+library(ggplot2)
+library(reshape2)
+
+# function to calculate genotype frequency given the population frequency of one of two alleles.
+
+genotype_prob <- function(maf) {
+  #hardy-weinberg model
+  p <- maf
+  q <- 1-p
+  x <- c(q^2, 2*p*q, p^2)
+  x
+} 
+```
+
+
+Let's create a tool to generate a fixed number of patient genotypes based on a set of SNPs with known population frequency.
+Since we're exploring parameter space, I want my function to be able to take some simulated allele frequencies ('my_p') and odds ratios ('effect_size').
+
+```{r msg = FALSE}
+pt_genotypes <- function(num_pts, snp_ids, my_p, effect_size) {
+  genotype_mat <- matrix(NA, length(snp_ids), num_pts)
+  for (i in 1:length(snp_ids)) {
+    genotype_mat[i,] <- sample(c(0,1,2), size = num_pts, prob = genotype_prob(my_p[i]), replace = T)
+  }
+  genotype_mat <- data.frame(genotype_mat, maf=my_p, row.names = snp_ids, OR = effect_size)
+  genotype_mat
+}
+
+# parameter block
+##################
+num_pts <- 100000
+num_snps <- 25
+maf_sd <- 0.3 # standard dev for normal dist of minor allele freq
+effect_size <- 1 + abs(rnorm(num_snps, 0, 0.2))
+baserate <- 0.001
+ages <- rnorm(num_pts, 65, 3)
+ages <- rep(65, num_pts)
+##################
+
+# Simulate some SNP odds ratios:
+
+plot(hist(effect_size))
+
+pts <- pt_genotypes(num_pts, paste(rep("rs", num_snps), sample(5e8, size=num_snps, replace = F), sep=""), 
+                    signif( abs(rnorm(num_snps, 0, maf_sd)), digits=2),
+                    effect_size = effect_size)
+
+# Here's some useful info:
+# the average of our SNPs odds ratios
+mean(pts$OR)
+# the average allele frequency
+mean(pts$maf)
+
+# let's get a look at how the genotypes look for a handful of patients
+pts[1:5, 1:8]
+
+```
+
+# Calculation of patient genotype based risk probability
+
+These SNPs confer risk for some disease, like being a baseball fan, at known effect sizes. In human genetics the effect sizes are expressed as odds ratios (OR). In plain language, this means the increased chance that you would get your disease (or become a baseball fan) that is associated with one out of two possible risk alleles (since humans and baseball fans are diploid). Let's suppose the population (which lacks risk alleles) has a baseline rate of 0.005, i.e. that 0.5% of people would be baseball fans without a risk allele. If the odds ratio at a particular locus were 1.2, the risk of being a baseball fan is \(1.2 \times 0.005 = 0.006\). The probability for a homozygote heterozygous for another SNP with OR 1.4 would be \(1.2^2 \times 1.4 \times 0.005 = 0.01008\) and so on. Also the cumulative OR for this patient would be \(1.2^2 \times 1.4 = 2.016\), so you could say this person is twice as likely as a typical person lacking the risk alleles to be a baseball fan.
+
+Given that we have a bunch of genotypes and a simple formula for calculating risk, lets do that now for each patient.
+```{r msg = FALSE}
+# After some experimenting, the vectorized form of this calculation is significantly faster, but requires that we carry it out in log space
+
+ptodds <- exp(colSums(log(pts$OR ^ pts[,1:num_pts])))
+
+# look at the distribution of unadjusted patient odds:
+plot(density(ptodds))
+
+```
+Now we have a little book-keeping to take care of. Firstly, we have to make some adjustments for age-related risk, and secondly, the odds are relative to the baseline rate, let's call it the "baserate" or the population average.
+
+## Adjustment for risk based on age
+
+Assume the GWAS odds ratios are obtained under conditions where two patient populations, cases and controls, have been age matched, say at age 60-65. In practice this is how these studies are done. What that means is that the lifetime risk at ~65 yrs is equal to the GWAS odds ratio. We would like to have a general description of risk and genotype that includes age, so we can handle age similar to the way you might amortize your taxes for a home lone, by dividing the risk into equal chunks over the life of the GWAS. There are probably better (non-linear) descriptions of age related risk, but for now we'll use this as an approximation. Here's what it looks like in R code.
+
+```{r msg = FALSE}
+ptodds.age <- ptodds/65 * ages
+plot(density(ages))
+plot(density(ptodds.age))
+```
+
+## Adjustment for population average risk
+We've talked about baserate before, and we chose a value of 0.005 for the population average. But the way we have it set up now, if we multiply our odds ratios times this number, the population average is going to much greater than 0.5% because (by definition) GWAS has provided us with *common* alleles. Instead, we want to adjust the baserate down so that the average person has a risk of 1%. Easy: \(OR \times x = 0.005\). Solve for x:
+```{r msg=FALSE}
+popscale.factor <- 0.005/median(ptodds)
+# put it together with the age adjustment
+ptprobs.age <- ptodds/65 * ages * popscale.factor
+plot(density(ptodds.age))
+```
+
+## Simulating phenotypes
+
+We can represent our phenotype as a boolean value and sample from boolean space using each patient's individual risk ratio:
+### Setup
+```{r msg = FALSE}
+
+# generate cases 'n ctrls from polygenic risk data
+#########################
+sick <- numeric(num_pts)
+set.seed(99)
+for (i in 1:num_pts) {
+  sick[i] <- sample(c(0,1), size=1, prob = c(1-ptprobs.age[i], ptprobs.age[i]))
+}
+cases <- which(sick==TRUE)
+length(cases)
+# get an equal number of controls (non-sick people)
+ctrls <- sample(which(sick==FALSE), size = length(cases), replace = FALSE)
+ptrisk <- melt(data.frame(ctrls=ptprobs.age[ctrls], cases=ptprobs.age[cases]))
+names(ptrisk) <- c("trtgroup", "risk")
+#########################
+
+# violin plot compare distributin relative risk of cases controls
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() + theme(legend.position = "none")
+# distribution of case odds vs control odds
+ggplot(data=data.frame(or=ptprobs.age[cases][order(ptprobs.age[cases])]/ptprobs.age[ctrls][order(ptprobs.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
+# cases vs control ORs relative to line of unity
+ggplot(data=data.frame(cases=ptprobs.age[cases][order(ptprobs.age[cases])]/baserate, ctrls=ptprobs.age[ctrls][order(ptprobs.age[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
+  geom_point() + #xlim(0, 100) + ylim(0, 100) + 
+  geom_abline(intercept = 0, slope = 1, colour="red")
+
+caseOR <- ptprobs.age[cases][order(ptprobs.age[cases])]/baserate
+ctrlOR <- ptprobs.age[ctrls][order(ptprobs.age[ctrls])]/baserate
+# % of cases OR > 5
+length(which(caseOR>5))
+length(which(caseOR>5))/length(caseOR)
+# slope
+mean(caseOR/ctrlOR)
+
+```
+
+### Explanation
+What I've done is taken a matched group of patients and controls and ranked them by genetic risk. Clearly the distribution of risk is shifted for the cases relative to the controls, causing the points to be all to the left of the line of unity (they won't always be so, but we got lucky this time). The slope of the points can be approximated by taking the mean of case/ctrl. This is analagous to a q-q plot. What would happen if we repeated this whole experiment with increased effect sizes or allele frequency? It takes a long time to run the simulation, so I'll just put a table here where I've repeated with varying parameter inputs.[^1] Note that 'mafsd' and 'orsd' are the parameter inputs in the code above, to generate SNP properties.
+
+[^1]: This table was put together before I introduced age and population mean adjustments, so the odds ratios are wrong, but the conclusions, in particular the slopes, are largely the same.
+
+```{r echo=FALSE, msg=FALSE, results = 'asis'}
+library(knitr)
+slopes <- data.frame(meanAF=c(.0829,.0731,.1121,.3434,.0512,.0371,.1023), 
+                     mafsd=c(.1,.1,.2,.3,.05,.05,.1), 
+                     meanOR=c(1.21,1.1,1.19,1.2,1.26,1.35,1.38), 
+                     orsd=c(.2,.1,.2,.2,.3,.4,.4),
+                     slope=c(1.2,1.03,1.18,1.39,1.22,1.23,1.95),
+                     OR5=c(133,0,209,151,135,101,451),
+                     ncases=c(2255,1438,2428,151,2050,1867,579),
+                     pct = c("5.9%", "0%", "8.6%", "100%", "6.6%", "5.4%", "78%"))
+
+kable(slopes)
+```
+It is worth briefly summarizing what I've learned about the parameters here. Obviously, the greater the odds ratios, the greater the discrimination power (measured as slope). No big surprise there. But what about allele frequency? I wasn't sure what to expect here because on the one hand, a more frequently occuring risk SNP might add more signal, but on the other hand, if a typical person has that SNP (because it's common), it should melt into the background. In otherwords when we do our population adjustment common SNPs might be factored out. This is apparently wrong, because increasing allele frequency from .1 to .3 while holding effect size constant resulted in a large change in slope, from 1.18 to 1.39.
+
+Now that we have some background on population genotype simulation and parameters, let's apply it to a real-world example.
+
+# Application to Ovarian Cancer
+
+I work on Ovarian Cancer so I'm curious to apply this model using some real SNPs that have been discovered in GWAS. There are actually 5 subtypes of Ovarian cancer, but I'll focus on the most common one to keep things simple for now. Later, it should be possible to create a panel of SNPs to calculate risk probability for a bunch of diseases or subtypes simultaneously. 
+
+## Simulation from GWAS SNPs
+
+We can leverage all the code from the previous sections to simulate a patient population using the GWAS SNPs, their allele frequencies in Europeans, and the Odds Ratios. We're constructing a scenario for predicting a patient population that behaves, phenotypically speaking, according to the rules we laid out before.
+
+### Setup
+
+To get started, I went to the [gwas catalog](https://www.ebi.ac.uk/gwas/) and fetched 12 independent risk loci. We'll go ahead and repeat all the calculations as before, generating the distribution graphs so we can compare them to the results in the previous sections. We also overwrite some of the previous parameters, like the baseline population rate of ovarian cancer (1.3%), and we set a seed for repeatability.
+
+```{r echo=FALSE, msg = FALSE, results='asis'}
+
+################### OVARIAN CANCER
+ovc_snps <- c("rs7651446", "rs3814113", "rs10088218", "rs9303542", "rs8170", "rs2072590", "rs34289250", 
+              "rs11782652", "rs1243180", "rs11907546", "rs2046210", "rs10069690")
+ovc_or   <- c(1.59, 1.2658228, 1.2987013, 1.14, 1.19, 1.14, 7.95, 1.24, 1.1, 1.1111112, 1.28, 1.14)
+ovc_maf  <- c(0.05, 0.32, 0.13, 0.27, 0.19, 0.68, 0.0089, 0.07, 0.31, .35903, 0.08, 0.26)
+
+ovc.table <- data.frame(SNP_ID = ovc_snps, Odds_Ratio = ovc_or, Risk_Allele_Freq = ovc_maf)
+kable(ovc.table)
+
+baserate <- 0.013
+
+set.seed(1999)
+ovcpts <- pt_genotypes(num_pts, ovc_snps, ovc_maf, effect_size = ovc_or)
+ovcodds <- exp(colSums(log(ovcpts$OR ^ ovcpts[,1:num_pts])))
+popscale.factor <- baserate/median(ovcodds)
+ovcprobs <- ovcodds * popscale.factor
+ovcprobs.age <- ovcprobs/45 * (ages-35)
+
+valid.patients <- which(ages > 35 & ages < 80)
+ovcprobs.age <- ovcprobs.age[valid.patients]
+
+plot(density(ovcprobs))
+which(ovcprobs.age>1)
+
+
+#FUN=function(x) {baserate*prod(pts$OR^x)}
+# generate cases 'n ctrls from polygenic risk data
+#########################
+set.seed(2000)
+ovcsick <- numeric(length(valid.patients))
+for (i in 1:length(valid.patients)) {
+  ovcsick[i] <- sample(c(0,1), size=1, prob = c(1-ovcprobs.age[i], ovcprobs.age[i]))
+}
+cases <- which(ovcsick==TRUE)
+length(cases)
+ctrls <- sample(which(ovcsick==FALSE), size = length(cases), replace = FALSE)
+ptrisk <- melt(data.frame(ctrls=ovcprobs.age[ctrls], cases=ovcprobs.age[cases]))
+names(ptrisk) <- c("trtgroup", "risk")
+#########################
+
+# violin plot compare distributin relative risk of cases controls
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
+ggplot(data=data.frame(or=ovcprobs.age[cases][order(ovcprobs.age[cases])]/ovcprobs.age[ctrls][order(ovcprobs.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
+ggplot(data=data.frame(cases=ovcprobs.age[cases][order(ovcprobs.age[cases])]/baserate, ctrls=ovcprobs.age[ctrls][order(ovcprobs.age[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
+  geom_point() + #xlim(0, 20) + ylim(0, 200) + 
+  geom_abline(intercept = 0, slope = 1, colour="red") +
+  geom_hline(yintercept=quantile(ovcprobs.age[cases]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2) +
+  geom_vline(xintercept=quantile(ovcprobs.age[ctrls]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2)
+
+
+```
+
+### Explanation
+It is important to point out that I don't know if the graphs reflect anything close to reality. All we've done is simulate a population of patients like we did before, with genotypes derived from actual ovarian cancer SNPs. I changed the baserate (desired pop average risk) to 0.01. About 75% of cases are indistinguishable from the control population. This seems quite plausible, and suggests that 3/4 of people who get ovarian cancer (in this scenario) are indistinguishable risk by genotype from background. For the remaining 1/4, perhaps we could have taken preventive measures to lower their risk.
+
+## Large effect mutations (BRCA1 & 2)
+
+One important real world question to investigate is, what if we have a large-effect point mutation that is relatively common. Such mutations exist and modify risk for several cancers, including other hormone driven cancers such as Breast and Prostate. The most famous mutations are for [BRCA1 & BRCA2](https://www.cancer.gov/about-cancer/causes-prevention/genetics/brca-fact-sheet). These are trickier to model because there are more than one, in fact many, different mutations in this gene, with presumably varying odds ratios. To fudge this, I am going to say a woman has some probability of being a BRCA1 carrier (8-10% for Ashkenazi Jewish) , and that the odds of developing ovarian cancer are 39%[^2] over a lifetime of 80 years.
+
+[^2]: See Antoniou A, Pharoah PD, Narod S, et al. Average risks of breast and ovarian cancer associated with BRCA1 or BRCA2 mutations detected in case series unselected for family history: A combined analysis of 22 studies. American Journal of Human Genetics 2003; 72(5):1117–1130.
+
+### Setup
+
+We'll have to reformulate our risk formula a little bit, but to save time I'll borrow the previously generated ORs.
+
+```{r msg = FALSE}
+################### BRCA Muts
+
+brca1.prob <- 0.025
+brca1.OR <- .39 # technically not an OR
+brca2.prob <- 0.02
+brca2.OR <- .12
+
+ovcprobs.brca.age <- ovcprobs.age + 
+  brca1.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE) +
+  brca2.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE)
+ovcprobs.brca.age <- ovcprobs.brca.age[valid.patients]
+
+plot(density(ovcprobs.brca.age))
+plot(x=ovcprobs.age, y=ovcprobs.brca.age)
+
+#FUN=function(x) {baserate*prod(pts$OR^x)}
+# generate cases 'n ctrls from polygenic risk data
+#########################
+ovcsick.brca <- numeric(length(valid.patients))
+for (i in 1:length(ovcprobs.brca.age)) {
+  ovcsick.brca[i] <- sample(c(0,1), size=1, prob = c(1-ovcprobs.brca.age[i], ovcprobs.brca.age[i]))
+}
+cases <- which(ovcsick.brca==TRUE)
+length(cases)
+ctrls <- sample(which(ovcsick.brca==FALSE), size = length(cases), replace = FALSE)
+ptrisk <- melt(data.frame(ctrls=ovcprobs.brca.age[ctrls], cases=ovcprobs.brca.age[cases]))
+names(ptrisk) <- c("trtgroup", "risk")
+#########################
+
+# violin plot compare distributin relative risk of cases controls
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
+```
+
+```{r}
+ggplot(data=data.frame(or=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
+ggplot(data=data.frame(cases=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/baserate, ctrls=ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
+  geom_point() + 
+  geom_abline(intercept = 0, slope = 1, colour="red") +
+  geom_hline(yintercept=quantile(ovcprobs.brca.age[cases]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2) +
+  geom_vline(xintercept=quantile(ovcprobs.brca.age[ctrls]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2)
+
+```
+### Explanation
+These graphs are very helpful in clarifying the shape of the ones in the preceding section. For one thing, notice the weird step shapes at 40 OR and 12 OR above that. Clearly the BRCA1 and 2 mutations are responsible for this structure. The third step is likely patients that have both mutations. The step shape is reminiscent of what we saw in the previous section with the ovarian SNPs, so we can conjecture that the shape of that graph is driven by a single high-effect common SNP. Another way to think of it is that the more similar the SNPs are in effect sizes, the smoother the line will be. Let's wrap up our analysis of this section with some useful statistics, as before.
+
+```{r}
+caseOR <- ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/baserate
+ctrlOR <- ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]/baserate
+# % of cases OR > 5
+length(which(caseOR>5))
+length(which(caseOR>5))/length(caseOR)
+# slope
+mean(caseOR/ctrlOR)
+
+```
+
+# Acknowledgements
+Special thanks to Simon G. Coetzee, for discussions and feedback on making the R code more efficient.

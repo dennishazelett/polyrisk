@@ -62,6 +62,7 @@ gc()
 # generate cases 'n ctrls from polygenic risk data
 #########################
 sick <- numeric(num_pts)
+set.seed(1234)
 for (i in 1:num_pts) {
   sick[i] <- sample(c(0,1), size=1, prob = c(1-ptprobs.age[i], ptprobs.age[i]))
 }
@@ -81,7 +82,7 @@ ggplot(data=data.frame(cases=ptprobs[cases][order(ptprobs[cases])]/baserate, ctr
   geom_abline(intercept = 0, slope = 1, colour="red")
 dev.off()
 
-
+?sample
 
 caseOR <- ptprobs[cases][order(ptprobs[cases])]/baserate
 ctrlOR <- ptprobs[ctrls][order(ptprobs[ctrls])]/baserate
@@ -97,10 +98,11 @@ ovc_snps <- c("rs7651446", "rs3814113", "rs10088218", "rs9303542", "rs8170", "rs
               "rs11782652", "rs1243180", "rs11907546", "rs2046210", "rs10069690")
 ovc_or   <- c(1.59, 1.2658228, 1.2987013, 1.14, 1.19, 1.14, 7.95, 1.24, 1.1, 1.1111112, 1.28, 1.14)
 ovc_maf  <- c(0.05, 0.32, 0.13, 0.27, 0.19, 0.68, 0.0089, 0.07, 0.31, .35903, 0.08, 0.26)
+baserate <- 0.013
 
 ovcpts <- pt_genotypes(num_pts, ovc_snps, ovc_maf, effect_size = ovc_or)
 ovcodds <- exp(colSums(log(ovcpts$OR ^ ovcpts[,1:num_pts])))
-popscale.factor <- .01/median(ovcodds)
+popscale.factor <- baserate/median(ovcodds)
 ovcprobs <- ovcodds * popscale.factor
 ovcprobs.age <- ovcprobs/45 * (ages-35)
 
@@ -114,6 +116,7 @@ which(ovcprobs.age>1)
 #FUN=function(x) {baserate*prod(pts$OR^x)}
 # generate cases 'n ctrls from polygenic risk data
 #########################
+set.seed(2000)
 ovcsick <- numeric(length(valid.patients))
 for (i in 1:length(valid.patients)) {
   ovcsick[i] <- sample(c(0,1), size=1, prob = c(1-ovcprobs.age[i], ovcprobs.age[i]))
@@ -127,22 +130,67 @@ names(ptrisk) <- c("trtgroup", "risk")
 
 # violin plot compare distributin relative risk of cases controls
 ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
-#ggplot(data=data.frame(or=ptprobs[cases][order(ptprobs[cases])]/ptprobs[ctrls][order(ptprobs[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
-png("ovarian_12_snps.png", w=4,h=4,u="in")
+ggplot(data=data.frame(or=ovcprobs.age[cases][order(ovcprobs.age[cases])]/ovcprobs.age[ctrls][order(ovcprobs.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
 ggplot(data=data.frame(cases=ovcprobs.age[cases][order(ovcprobs.age[cases])]/baserate, ctrls=ovcprobs.age[ctrls][order(ovcprobs.age[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
   geom_point() + #xlim(0, 20) + ylim(0, 200) + 
   geom_abline(intercept = 0, slope = 1, colour="red") +
   geom_hline(yintercept=quantile(ovcprobs.age[cases]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2) +
   geom_vline(xintercept=quantile(ovcprobs.age[ctrls]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2)
 
-dev.off()
-?quantile
-
-caseOR <- ptprobs[cases][order(ovcprobs[cases])]/baserate
-ctrlOR <- ptprobs[ctrls][order(ovcprobs[ctrls])]/baserate
+caseOR <- ovcprobs[cases][order(ovcprobs[cases])]/baserate
+ctrlOR <- ovcprobs[ctrls][order(ovcprobs[ctrls])]/baserate
 # % of cases OR > 5
 length(which(caseOR>5))
 length(which(caseOR>5))/length(caseOR)
 # slope
 mean(caseOR/ctrlOR)
 save(pts, yrs, file = "pts.RDa")
+
+
+################### BRCA Muts
+
+brca1.prob <- 0.025
+brca1.OR <- .39
+brca2.prob <- 0.02
+brca2.OR <- .12
+
+ovcprobs.brca.age <- ovcprobs.age + 
+  brca1.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE) +
+  brca2.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE)
+ovcprobs.brca.age <- ovcprobs.brca.age[valid.patients]
+
+plot(density(ovcprobs.brca.age))
+plot(x=ovcprobs.age, y=ovcprobs.brca.age)
+
+#FUN=function(x) {baserate*prod(pts$OR^x)}
+# generate cases 'n ctrls from polygenic risk data
+#########################
+ovcsick.brca <- numeric(length(valid.patients))
+for (i in 1:length(ovcprobs.brca.age)) {
+  ovcsick.brca[i] <- sample(c(0,1), size=1, prob = c(1-ovcprobs.brca.age[i], ovcprobs.brca.age[i]))
+}
+cases <- which(ovcsick.brca==TRUE)
+length(cases)
+ctrls <- sample(which(ovcsick.brca==FALSE), size = length(cases), replace = FALSE)
+ptrisk <- melt(data.frame(ctrls=ovcprobs.brca.age[ctrls], cases=ovcprobs.brca.age[cases]))
+names(ptrisk) <- c("trtgroup", "risk")
+#########################
+
+# violin plot compare distributin relative risk of cases controls
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
+ggplot(data=data.frame(or=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
+ggplot(data=data.frame(cases=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/baserate, ctrls=ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
+  geom_point() + #xlim(0, 20) + ylim(0, 200) + 
+  geom_abline(intercept = 0, slope = 1, colour="red") +
+  geom_hline(yintercept=quantile(ovcprobs.brca.age[cases]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2) +
+  geom_vline(xintercept=quantile(ovcprobs.brca.age[ctrls]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2)
+
+
+caseOR <- ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/baserate
+ctrlOR <- ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]/baserate
+# % of cases OR > 5
+length(which(caseOR>5))
+length(which(caseOR>5))/length(caseOR)
+# slope
+mean(caseOR/ctrlOR)
+
