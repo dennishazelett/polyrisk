@@ -50,6 +50,7 @@ pt_genotypes <- function(num_pts, snp_ids, my_p, effect_size) {
 num_pts <- 100000
 num_snps <- 25
 maf_sd <- 0.3 # standard dev for normal dist of minor allele freq
+set.seed(1492)
 effect_size <- 1 + abs(rnorm(num_snps, 0, 0.2))
 baserate <- 0.001
 ages <- rnorm(num_pts, 65, 3)
@@ -58,7 +59,7 @@ ages <- rep(65, num_pts)
 
 # Simulate some SNP odds ratios:
 
-plot(hist(effect_size))
+hist(effect_size)
 
 pts <- pt_genotypes(num_pts, paste(rep("rs", num_snps), sample(5e8, size=num_snps, replace = F), sep=""), 
                     signif( abs(rnorm(num_snps, 0, maf_sd)), digits=2),
@@ -98,7 +99,7 @@ Assume the GWAS odds ratios are obtained under conditions where two patient popu
 ```{r msg = FALSE}
 ptodds.age <- ptodds/65 * ages
 plot(density(ages))
-plot(density(ptodds.age))
+plot(density(log(ptodds.age)))
 ```
 
 ## Adjustment for population average risk
@@ -107,7 +108,7 @@ We've talked about baserate before, and we chose a value of 0.005 for the popula
 popscale.factor <- 0.005/median(ptodds)
 # put it together with the age adjustment
 ptprobs.age <- ptodds/65 * ages * popscale.factor
-plot(density(ptodds.age))
+plot(density(log(ptprobs.age)))
 ```
 
 ## Simulating phenotypes
@@ -282,7 +283,7 @@ names(ptrisk) <- c("trtgroup", "risk")
 #########################
 
 # violin plot compare distributin relative risk of cases controls
-ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() + theme(legend.position = "none")
 ```
 
 ```{r}
@@ -307,6 +308,8 @@ length(which(caseOR>5))/length(caseOR)
 mean(caseOR/ctrlOR)
 
 ```
+
+# Stan Model
 
 # Acknowledgements
 Special thanks to Simon G. Coetzee, for discussions and feedback on making the R code more efficient.
