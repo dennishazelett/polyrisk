@@ -321,10 +321,10 @@ I'm using the same ovarian SNPs as before, adding some fake BRCA1 mutations. Not
 ################### BRCA Muts
 brca1.prob <- 0.025
 brca2.prob <- 0.02
-brca1.OR <- 20
-brca2.OR <- 4
+brca1.OR <- 40
+brca2.OR <- 11
 # start using prevalence instead of #baserate since this is what we really mean
-prevalence <- 0.013
+prevalence <- 0.1
 
 ovc_snps <- c("rs7651446", "rs3814113", "rs10088218", "rs9303542", "rs8170", "rs2072590", "rs34289250", 
               "rs11782652", "rs1243180", "rs11907546", "rs2046210", "rs10069690", "brca1", "brca2")
@@ -397,7 +397,7 @@ None currently
 
 ### Case vs control study
 
-```{r}
+```{r msg = FALSE, echo = TRUE}
 
 # generate cases 'n ctrls from polygenic risk data
 #########################
@@ -443,20 +443,20 @@ ggplot(data=data.frame(cases=probs.scale[valid.patients[cases]][order(probs.scal
   geom_vline(xintercept=quantile(probs.scale[valid.patients[ctrls]]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2)
 
 
-caseOR <- probs[cases][order(probs[cases])]/baserate
-ctrlOR <- probs[ctrls][order(probs[ctrls])]/baserate
+caseOR <- probs.scale[valid.patients[cases]][order(probs.scale[valid.patients[cases]])]/prevalence
+ctrlOR <- probs.scale[valid.patients[ctrls]][order(probs.scale[valid.patients[ctrls]])]/prevalence
 # slope
 mean(caseOR/ctrlOR)
 
 # prevalence
 length(cases)/nvalid
-# percent of brca1+ patients that are cases
+# fraction of brca1+ patients that are cases
 sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))/sum(brca1.carrier[valid.patients])
-# percent of cases that are brca1+
+# fraction of cases that are brca1+
 sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))/length(cases)
-# percent of non-BRCA1 patients that are cases
+# fraction of non-BRCA1 patients that are cases
 sum(cases %in% which(brca1.carrier[valid.patients]==FALSE))/sum(brca1.carrier[valid.patients]==FALSE)
-# percent of BRCA2 patients that are cases
+# fraction of BRCA2 patients that are cases
 sum(cases %in% which(brca2.carrier[valid.patients]==TRUE))/sum(brca2.carrier[valid.patients])
 
 ```
