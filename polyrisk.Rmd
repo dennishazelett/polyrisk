@@ -309,7 +309,160 @@ mean(caseOR/ctrlOR)
 
 ```
 
+## BRCA mutations as regular SNPs 3/14/2017
+
+Above I've modeled BRCA mutations as risk factors. It is sensible to do this, because BRCA mutations are varied and rare, but in aggregate quite common (with a couple notable exceptions). In any case we're just averaging them out as a kind of fudge. In the near future, I expect better information to become available on individual BRCA mutations, including allele frequency and odds-ratios. So I want build a dummy model around this situation, just to see what adding a few large-effect mutations and modeling them *as snps* will do.
+
+### Creating patient data
+
+I'm using the same ovarian SNPs as before, adding some fake BRCA1 mutations. Note that I am also creating a categorical variable to aid in plotting and analysis later.
+
+```{r msg = FALSE}
+################### BRCA Muts
+brca1.prob <- 0.025
+brca2.prob <- 0.02
+brca1.OR <- 20
+brca2.OR <- 4
+# start using prevalence instead of #baserate since this is what we really mean
+prevalence <- 0.013
+
+ovc_snps <- c("rs7651446", "rs3814113", "rs10088218", "rs9303542", "rs8170", "rs2072590", "rs34289250", 
+              "rs11782652", "rs1243180", "rs11907546", "rs2046210", "rs10069690", "brca1", "brca2")
+ovc_or   <- c(1.59, 1.2658228, 1.2987013, 1.14, 1.19, 1.14, 7.95, 1.24, 1.1, 1.1111112, 1.28, 1.14, brca1.OR, brca2.OR)
+ovc_maf  <- c(0.05, 0.32, 0.13, 0.27, 0.19, 0.68, 0.0089, 0.07, 0.31, .35903, 0.08, 0.26, brca1.prob, brca2.prob)
+prevalence <- 0.013
+
+ovcpts <- pt_genotypes(num_pts, ovc_snps, ovc_maf, effect_size = ovc_or)
+ovcodds <- exp(colSums(log(ovcpts$OR ^ ovcpts[,1:num_pts])))
+gc()
+
+# add a categorical variable to aid in graphical representations for later
+brca.carrier <- rep("NON-BRCA", num_pts)
+brca.carrier[which(ovcpts[13,1:1e5]>0)] <- "BRCA1"
+brca.carrier[which(ovcpts[14,1:1e5]>0)] <- "BRCA2"
+```
+
+### Setup
+
+As before, I want to scale the probabilities so that the mean roughly matches the overall prevalence. The ``popscale.factor'' variable is akin to saying "this is the amount of residual risk when you remove all the risky alleles from the population". This number can never be zero (unless we discover a preventive measure that is 100% effective), but the more risk factors we know the lower its variance will be. For now we will treat it as a constant.
+
+```{r msg = FALSE} 
+ovcprobs.brca <- ovcodds 
+popscale.factor <- prevalence / mean(ovcprobs.brca)
+valid.patients <- which(ovcprobs.brca*popscale.factor < 1)
+nvalid <- length(valid.patients)
+```
+
+### Age model
+
+I want to explore how risk changes over a persons lifetime, given different genotype backgrounds. To do this I scaled using an exponential function to generate a factor that stays near 0 until the age of about 30 and then starts climbing rapidly to 80. I am using this in place of the linear scalar I used in previous sections; one of its nice properties is that it becomes linear in log space, and thus probably behaves closer to a true biological process.
+
+
+```{r echo = TRUE}
+
+# demonstrate age scalar:
+# create a func
+age.scale <- function(age, onset.age, risk.age) {
+  # age is the patient age
+  # onset.age is the age at which the process begins to accelerate
+  # risk.age is the age at which lifetime risk accumulates to its maximum
+  1/risk.age * age^((age-onset.age)/(risk.age-onset.age))
+}
+
+# let's see how this function works
+plot(x=1:80, y=age.scale(1:80, 10, 80), type="l", xlab="age in years")
+
+ages <- c(rep(20, nvalid), 
+          rep(30, nvalid),
+          rep(40, nvalid),
+          rep(50, nvalid),
+          rep(60, nvalid),
+          rep(70, nvalid),
+          rep(80, nvalid))
+
+# people with BRCA1 mutations can get sick by age 30, so I'll set the onset age to 15 to allow 10 years for some risk to accumulate
+ovcprobs.brca.age <- rep(ovcprobs.brca[valid.patients],7) * age.scale(ages, 20, 80)
+
+agerisk <- data.frame(age = as.factor(ages), 
+                      risk = ovcprobs.brca.age, 
+                      brca = as.factor(rep(brca.carrier[valid.patients], 7)))
+
+gc()
+
+ggplot(agerisk, aes(x = age, y = risk)) + geom_boxplot(aes(fill = brca), notch = TRUE) + labs(y="Relative Risk (RR)")
+
+```
+### Explanation
+None currently
+
+### Case vs control study
+
+```{r}
+
+# generate cases 'n ctrls from polygenic risk data
+#########################
+ages <- sample(50:80, size = num_pts, replace = TRUE)
+probs <- ovcprobs.brca * age.scale(ages, 20, 80)
+valid.patients <- which(probs * popscale.factor < 1)
+nvalid <- length(valid.patients)
+ovcsick.brca <- matrix(nrow = nvalid, ncol = 100)
+dim(ovcsick.brca)
+
+for (i in 1:nvalid) {
+  ovcsick.brca[i,] <- sample(c(0,1), size=10, prob = c(1-popscale.factor*probs[valid.patients[i]], popscale.factor*probs[valid.patients[i]]), replace = TRUE)
+}
+
+pick.one <- sample(10, 1)
+
+cases <- which(ovcsick.brca[,pick.one]==TRUE)
+length(cases)
+length(cases)/nvalid
+
+probs.scale <- probs * popscale.factor
+
+ctrls <- sample(which(ovcsick.brca[,pick.one]==FALSE), size = length(cases), replace = FALSE)
+ptrisk <- melt(data.frame(ctrls=probs.scale[valid.patients[ctrls]], cases=probs.scale[valid.patients[cases]]))
+names(ptrisk) <- c("trtgroup", "risk")
+#########################
+
+mean(probs.scale[brca1.carrier[valid.patients]==T])
+mean(probs.scale[brca2.carrier[valid.patients]==T])
+mean(probs.scale[brca1.carrier[valid.patients]==F])
+sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))
+
+# violin plot compare distributin relative risk of cases controls
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/prevalence, colour=trtgroup, fill=trtgroup)) + geom_violin() + labs(x = "patient population", y = "Relative Risk (RR)")
+
+#ggplot(data=data.frame(or=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
+ggplot(data=data.frame(cases=probs.scale[valid.patients[cases]][order(probs.scale[valid.patients[cases]])]/prevalence,
+                       ctrls=probs.scale[valid.patients[ctrls]][order(probs.scale[valid.patients[ctrls]])]/prevalence), 
+       aes(x=ctrls, y=cases)) + 
+  geom_point() + #xlim(0, 20) + ylim(0, 200) + 
+  geom_abline(intercept = 0, slope = 1, colour="red") +
+  geom_hline(yintercept=quantile(probs.scale[valid.patients[cases]]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2) +
+  geom_vline(xintercept=quantile(probs.scale[valid.patients[ctrls]]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2)
+
+
+caseOR <- probs[cases][order(probs[cases])]/baserate
+ctrlOR <- probs[ctrls][order(probs[ctrls])]/baserate
+# slope
+mean(caseOR/ctrlOR)
+
+# prevalence
+length(cases)/nvalid
+# percent of brca1+ patients that are cases
+sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))/sum(brca1.carrier[valid.patients])
+# percent of cases that are brca1+
+sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))/length(cases)
+# percent of non-BRCA1 patients that are cases
+sum(cases %in% which(brca1.carrier[valid.patients]==FALSE))/sum(brca1.carrier[valid.patients]==FALSE)
+# percent of BRCA2 patients that are cases
+sum(cases %in% which(brca2.carrier[valid.patients]==TRUE))/sum(brca2.carrier[valid.patients])
+
+```
+
+
 # Stan Model
 
 # Acknowledgements
-Special thanks to Simon G. Coetzee, for discussions and feedback on making the R code more efficient.
+Special thanks to Simon G. Coetzee and Michelle Jones for discussions and feedback and SGC on making the R code more efficient.

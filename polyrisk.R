@@ -36,9 +36,8 @@ maf_sd <- 0.3 # standard dev for normal dist of minor allele freq
 effect_size <- 1 + abs(rnorm(num_snps, 0, 0.2))
 baserate <- 0.001
 ages <- rnorm(num_pts, 65, 3)
-ages <- rep(65, num_pts)
-plot(hist(ages))
-
+#ages <- rep(65, num_pts)
+hist(ages)
 ##################
 
 pts <- pt_genotypes(num_pts, paste(rep("rs", num_snps), sample(5e8, size=num_snps, replace = F), sep=""), 
@@ -51,6 +50,7 @@ mean(pts$maf)
 
 ptodds <- exp(colSums(log(pts$OR ^ pts[,1:num_pts])))
 ptprobs <- ptodds * baserate
+
 
 which(ptprobs.age > 1)
 mean(ptprobs)
@@ -102,12 +102,12 @@ baserate <- 0.013
 
 ovcpts <- pt_genotypes(num_pts, ovc_snps, ovc_maf, effect_size = ovc_or)
 ovcodds <- exp(colSums(log(ovcpts$OR ^ ovcpts[,1:num_pts])))
-popscale.factor <- baserate/median(ovcodds)
-ovcprobs <- ovcodds * popscale.factor
-ovcprobs.age <- ovcprobs/45 * (ages-35)
 
-valid.patients <- which(ages > 35 & ages < 80)
-ovcprobs.age <- ovcprobs.age[valid.patients]
+popscale.factor <- baserate / mean(ovcodds)
+ovcprobs <- ovcodds * popscale.factor
+plot(density(ovcprobs))
+valid.patients <- which(ovcprobs >=1 )
+
 
 plot(density(ovcprobs))
 which(ovcprobs.age>1)
@@ -148,49 +148,216 @@ save(pts, yrs, file = "pts.RDa")
 
 
 ################### BRCA Muts
-
 brca1.prob <- 0.025
-brca1.OR <- .39
 brca2.prob <- 0.02
-brca2.OR <- .12
+brca1.OR <- 20
+brca2.OR <- 4
+baserate <- 0.013
 
-ovcprobs.brca.age <- ovcprobs.age + 
-  brca1.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE) +
-  brca2.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE)
-ovcprobs.brca.age <- ovcprobs.brca.age[valid.patients]
+ovc_snps <- c("rs7651446", "rs3814113", "rs10088218", "rs9303542", "rs8170", "rs2072590", "rs34289250", 
+              "rs11782652", "rs1243180", "rs11907546", "rs2046210", "rs10069690", "brca1", "brca2")
+ovc_or   <- c(1.59, 1.2658228, 1.2987013, 1.14, 1.19, 1.14, 7.95, 1.24, 1.1, 1.1111112, 1.28, 1.14, brca1.OR, brca2.OR)
+ovc_maf  <- c(0.05, 0.32, 0.13, 0.27, 0.19, 0.68, 0.0089, 0.07, 0.31, .35903, 0.08, 0.26, brca1.prob, brca2.prob)
+prevalence <- 0.013
 
-plot(density(ovcprobs.brca.age))
-plot(x=ovcprobs.age, y=ovcprobs.brca.age)
+ovcpts <- pt_genotypes(num_pts, ovc_snps, ovc_maf, effect_size = ovc_or)
+ovcodds <- exp(colSums(log(ovcpts$OR ^ ovcpts[,1:num_pts])))
+gc()
 
-#FUN=function(x) {baserate*prod(pts$OR^x)}
+ovcpts[,1:5]
+#brca1.carrier <- sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE)
+#brca2.carrier <- sample(c(0,1), size=num_pts, prob=c(1-brca2.prob, brca2.prob), replace=TRUE)
+brca1.carrier <- rep(FALSE, num_pts)
+brca1.carrier[which(ovcpts[13,1:1e5]>0)] <- TRUE
+length(brca1.carrier)
+sum(brca1.carrier)
+brca2.carrier <- rep(FALSE, num_pts)
+brca2.carrier[which(ovcpts[14,1:1e5]>0)] <- TRUE
+length(brca2.carrier)
+sum(brca2.carrier)
+brca.carrier <- rep("NON-BRCA", num_pts)
+brca.carrier[which(ovcpts[13,1:1e5]>0)] <- "BRCA1"
+brca.carrier[which(ovcpts[14,1:1e5]>0)] <- "BRCA2"
+
+#set.seed(24)
+
+
+ovcprobs.brca <- ovcodds 
+popscale.factor <- prevalence / mean(ovcprobs.brca)
+valid.patients <- which(ovcprobs.brca*popscale.factor < 1)
+#f <- function (age) {1/age * age^((age-30)/80)}
+
+ages<-rep(20, num_pts)
+ovcprobs.brca.age.20 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
+#ovcprobs.brca.age.20.b <- ovcprobs.brca * f(ages)[valid.patients]
+ages<-rep(30, num_pts)
+ovcprobs.brca.age.30 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
+ages<-rep(40, num_pts)
+ovcprobs.brca.age.40 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
+ages<-rep(50, num_pts)
+ovcprobs.brca.age.50 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
+ages<-rep(60, num_pts)
+ovcprobs.brca.age.60 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
+ages<-rep(70, num_pts)
+ovcprobs.brca.age.70 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
+ages<-rep(80, num_pts)
+ovcprobs.brca.age.80 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
+
+nvalid <- length(valid.patients)
+
+ages <- c(rep(20, nvalid), 
+          rep(30, nvalid),
+          rep(40, nvalid),
+          rep(50, nvalid),
+          rep(60, nvalid),
+          rep(70, nvalid),
+          rep(80, nvalid))
+
+
+
+
+agerisk <- data.frame(age = as.factor(ages), 
+                      risk = c(ovcprobs.brca.age.20, 
+                               ovcprobs.brca.age.30,
+                               ovcprobs.brca.age.40, 
+                               ovcprobs.brca.age.50, 
+                               ovcprobs.brca.age.60, 
+                               ovcprobs.brca.age.70, 
+                               ovcprobs.brca.age.80),
+                      brca = as.factor(rep(brca.carrier[valid.patients], 7)))
+
+gc()
+
+
+dim(agerisk)
+
+ggplot(agerisk, aes(x = age, y = risk)) + geom_boxplot(aes(fill = brca), notch = TRUE) + labs(y="log10 relative risk (RR)") #+ scale_y_log10()
+
+
+
 # generate cases 'n ctrls from polygenic risk data
 #########################
-ovcsick.brca <- numeric(length(valid.patients))
-for (i in 1:length(ovcprobs.brca.age)) {
-  ovcsick.brca[i] <- sample(c(0,1), size=1, prob = c(1-ovcprobs.brca.age[i], ovcprobs.brca.age[i]))
+probs <- ovcprobs.brca.age
+
+ovcsick.brca <- matrix(nrow = nvalid, ncol = 100)
+dim(ovcsick.brca)
+
+for (i in 1:nvalid) {
+  ovcsick.brca[i,] <- sample(c(0,1), size=10, prob = c(1-popscale.factor*probs[i], popscale.factor*probs[i]), replace = TRUE)
 }
-cases <- which(ovcsick.brca==TRUE)
+
+pick.one <- sample(10, 1)
+
+cases <- which(ovcsick.brca[,pick.one]==TRUE)
 length(cases)
-ctrls <- sample(which(ovcsick.brca==FALSE), size = length(cases), replace = FALSE)
-ptrisk <- melt(data.frame(ctrls=ovcprobs.brca.age[ctrls], cases=ovcprobs.brca.age[cases]))
+length(cases)/nvalid
+
+ctrls <- sample(which(ovcsick.brca[,pick.one]==FALSE), size = length(cases), replace = FALSE)
+ptrisk <- melt(data.frame(ctrls=probs[ctrls], cases=probs[cases]))
 names(ptrisk) <- c("trtgroup", "risk")
 #########################
 
+probs.scale <- probs * popscale.factor
+length(probs.scale)
+mean(probs.scale[brca1.carrier[valid.patients]==T])
+mean(probs.scale[brca2.carrier[valid.patients]==T])
+mean(probs.scale[brca1.carrier[valid.patients]==F])
+sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))
+
 # violin plot compare distributin relative risk of cases controls
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() + labs(x = "patient population", y = "Relative Risk (RR)")
+#ggplot(data=data.frame(or=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
+ggplot(data=data.frame(cases=probs[cases][order(probs[cases])]/baserate, ctrls=probs[ctrls][order(probs[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
+  geom_point() + #xlim(0, 20) + ylim(0, 200) + 
+  geom_abline(intercept = 0, slope = 1, colour="red") +
+  geom_hline(yintercept=quantile(probs[cases]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2) +
+  geom_vline(xintercept=quantile(probs[ctrls]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2)
+
+
+caseOR <- probs[cases][order(probs[cases])]/baserate
+ctrlOR <- probs[ctrls][order(probs[ctrls])]/baserate
+# % of cases OR > 5
+length(which(caseOR>5))
+length(which(caseOR>5))/length(caseOR)
+# slope
+mean(caseOR/ctrlOR)
+
+# prevalence
+length(cases)/nvalid
+# percent of brca1+ patients that are cases
+sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))/sum(brca1.carrier[valid.patients])
+# percent of cases that are brca1+
+sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))/length(cases)
+# percent of non-BRCA1 patients that are cases
+sum(cases %in% which(brca1.carrier[valid.patients]==FALSE))/sum(brca1.carrier[valid.patients]==FALSE)
+# percent of BRCA2 patients that are cases
+sum(cases %in% which(brca2.carrier[valid.patients]==TRUE))/sum(brca2.carrier[valid.patients])
+
+
+########## Tissue specific compartmentalization of risk
+##########
+#
+# Suppose risk is subdivided in different tissues/organs
+# Suppose tissue of origin (TO) and second site (SS1, SS2, ...)
+# Suppose the SS risk is dependent on TO, how does that look mathematically?
+# TO effective (TO_eff) = 
+#
+# SS_eff <- inv_logit(TO) * SS
+#
+# Questions, would data still fit independent risk model, but with larger variances for TO? 
+# Or something different?
+#
+# I need to generate weights for every SNP in every tissue/organ system
+# To keep it simple, let's suppose there are 4 categories, and two of them have signal associated with some SNPs, but are not truly involved
+
+# tissue weights : (from funciVAR overlaps, just making these up right now)
+
+#          1     2     3     4     5     6     7     8     9    10    11    12
+tw1 <- c(0.00, 0.23, 0.42, 0.56, 0.00, 0.00, 0.02, 0.00, 0.00, 0.55, 0.00, 0.00)
+tw2 <- c(0.00, 0.51, 0.72, 0.90, 0.00, 0.10, 0.00, 0.00, 0.00, 0.34, 0.00, 0.00)
+tw3 <- c(0.41, 0.00, 0.00, 0.12, 0.53, 0.62, 0.00, 0.23, 0.05, 0.69, 0.81, 0.22)
+tw4 <- c(0.01, 0.00, 0.00, 0.05, 0.00, 0.00, 0.00, 0.05, 0.00, 0.41, 0.00, 0.03)
+
+# causal tissue (hidden; used for simulation)
+ct1 <- NULL
+ct2 <- c(2, 3)
+ct3 <- c(1, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+ct4 <- NULL
+
+SS <- exp(colSums(log(ovcpts$OR[ct2] ^ ovcpts[,1:num_pts])))
+TO <- exp(colSums(log(ovcpts$OR[ct3] ^ ovcpts[,1:num_pts]))) + 
+  brca1.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE) +
+  brca2.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE)
+TO_eff <- SS^inv.logit(TO) * TO
+baserate <- 0.013
+popscale.factor <- baserate/mean(TO_eff)
+ovcprobs.w8d.age <- popscale.factor * TO_eff/45 * (ages-35)
+
+ovcprobs.w8d.age <- ovcprobs.w8d.age[valid.patients]
+plot(density(ovcprobs.w8d.age))
+which(ovcprobs.w8d.age>1)
+
+#########################
+ovcsick.w8d <- numeric(length(valid.patients))
+
+for (i in 1:length(valid.patients)) {
+  ovcsick.w8d[i] <- sample(c(0,1), size=1, prob = c(1-ovcprobs.w8d.age[i], ovcprobs.w8d.age[i]), replace = T)
+}
+
+
+cases <- which(ovcsick.w8d==TRUE)
+length(cases)
+ctrls <- sample(which(ovcsick.w8d==FALSE), size = length(cases), replace = FALSE)
+ptrisk <- melt(data.frame(ctrls=ovcprobs.w8d.age[ctrls], cases=ovcprobs.w8d.age[cases]))
+names(ptrisk) <- c("trtgroup", "risk")
+#########################
+
 ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
-ggplot(data=data.frame(or=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
+#ggplot(data=data.frame(or=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
 ggplot(data=data.frame(cases=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/baserate, ctrls=ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
   geom_point() + #xlim(0, 20) + ylim(0, 200) + 
   geom_abline(intercept = 0, slope = 1, colour="red") +
   geom_hline(yintercept=quantile(ovcprobs.brca.age[cases]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2) +
   geom_vline(xintercept=quantile(ovcprobs.brca.age[ctrls]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2)
 
-
-caseOR <- ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/baserate
-ctrlOR <- ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]/baserate
-# % of cases OR > 5
-length(which(caseOR>5))
-length(which(caseOR>5))/length(caseOR)
-# slope
-mean(caseOR/ctrlOR)
 
