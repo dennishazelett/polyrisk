@@ -187,22 +187,6 @@ popscale.factor <- prevalence / mean(ovcprobs.brca)
 valid.patients <- which(ovcprobs.brca*popscale.factor < 1)
 #f <- function (age) {1/age * age^((age-30)/80)}
 
-ages<-rep(20, num_pts)
-ovcprobs.brca.age.20 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
-#ovcprobs.brca.age.20.b <- ovcprobs.brca * f(ages)[valid.patients]
-ages<-rep(30, num_pts)
-ovcprobs.brca.age.30 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
-ages<-rep(40, num_pts)
-ovcprobs.brca.age.40 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
-ages<-rep(50, num_pts)
-ovcprobs.brca.age.50 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
-ages<-rep(60, num_pts)
-ovcprobs.brca.age.60 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
-ages<-rep(70, num_pts)
-ovcprobs.brca.age.70 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
-ages<-rep(80, num_pts)
-ovcprobs.brca.age.80 <- (ovcprobs.brca/80 * (ages^((ages-30)/50)))[valid.patients]
-
 nvalid <- length(valid.patients)
 
 ages <- c(rep(20, nvalid), 
@@ -320,18 +304,47 @@ tw4 <- c(0.01, 0.00, 0.00, 0.05, 0.00, 0.00, 0.00, 0.05, 0.00, 0.41, 0.00, 0.03)
 
 # causal tissue (hidden; used for simulation)
 ct1 <- NULL
-ct2 <- c(2, 3)
-ct3 <- c(1, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+ct2 <- c(2, 3, 4)
+ct3 <- c(1, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14)
 ct4 <- NULL
 
+library(boot)
+plot(x=1:100, y=inv.logit(1:100))
+
+inv_logit <- function(x, scale = 1, slope = 1, shift = 0) {
+  x <- scale * exp(x*slope - shift)/(1+exp(x * slope - shift))
+  for (i in 1:length(x)) {
+    if (is.na(x[i])) {x[i] <- 1}
+  }
+  x
+}
+TO[872]
+plot(x=-1:100, y=inv_logit(-1:100, slope= 1/1.2, shift = 5), type="l")
+inv_logit(100000, shift = 8)
+ovcpts[13,1e5+2]
+
+#####
 SS <- exp(colSums(log(ovcpts$OR[ct2] ^ ovcpts[,1:num_pts])))
-TO <- exp(colSums(log(ovcpts$OR[ct3] ^ ovcpts[,1:num_pts]))) + 
-  brca1.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE) +
-  brca2.OR*sample(c(0,1), size=num_pts, prob=c(1-brca1.prob, brca1.prob), replace=TRUE)
-TO_eff <- SS^inv.logit(TO) * TO
+#plot(density(SS))
+TO <- exp(colSums(log(ovcpts$OR[ct3] ^ ovcpts[,1:num_pts])))
+#plot(density(TO), xlim=c(0,100000))
+SS_eff <- SS^inv_logit(TO, slope = 1, shift = 8)
+#OR.mix <- TO^inv_logit(SS_eff, slope=1/1.2, shift=5)
+OR.mix <- SS_eff * TO
+
+#OR.flat <- SS * TO
+plot(density(SS_eff), col="red", lty=2)
+lines(density(SS))
+
+
 baserate <- 0.013
-popscale.factor <- baserate/mean(TO_eff)
-ovcprobs.w8d.age <- popscale.factor * TO_eff/45 * (ages-35)
+popscale.factor <- baserate/exp(mean(log(OR.mix)))
+
+#popscale.factor <- baserate/median(OR.flat)
+valid.patients <- which(popscale.factor * OR.mix < 1)
+#valid.patients <- which(popscale.factor * OR.flat < 1)
+ovcprobs.w8d.age <- popscale.factor * OR.mix * age.scale(ages, 20, 80)
+#ovcprobs.w8d.age <- popscale.factor * OR.flat * age.scale(ages, 20, 80)
 
 ovcprobs.w8d.age <- ovcprobs.w8d.age[valid.patients]
 plot(density(ovcprobs.w8d.age))
@@ -352,12 +365,12 @@ ptrisk <- melt(data.frame(ctrls=ovcprobs.w8d.age[ctrls], cases=ovcprobs.w8d.age[
 names(ptrisk) <- c("trtgroup", "risk")
 #########################
 
-ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
+#ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
 #ggplot(data=data.frame(or=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
-ggplot(data=data.frame(cases=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/baserate, ctrls=ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
+ggplot(data=data.frame(cases=ovcprobs.w8d.age[cases][order(ovcprobs.w8d.age[cases])]/baserate, ctrls=ovcprobs.w8d.age[ctrls][order(ovcprobs.w8d.age[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
   geom_point() + #xlim(0, 20) + ylim(0, 200) + 
   geom_abline(intercept = 0, slope = 1, colour="red") +
-  geom_hline(yintercept=quantile(ovcprobs.brca.age[cases]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2) +
-  geom_vline(xintercept=quantile(ovcprobs.brca.age[ctrls]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2)
+  geom_hline(yintercept=quantile(ovcprobs.w8d.age[cases]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2) +
+  geom_vline(xintercept=quantile(ovcprobs.w8d.age[ctrls]/baserate, probs=c(.5,.95,.99)), colour="grey", lty=2)
 
 
