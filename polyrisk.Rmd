@@ -315,31 +315,35 @@ Above I've modeled BRCA mutations as risk factors. It is sensible to do this, be
 
 ### Creating patient data
 
-I'm using the same ovarian SNPs as before, adding some fake BRCA1 mutations. Note that I am also creating a categorical variable to aid in plotting and analysis later.
+I'm using the same ovarian SNPs as before, adding some fake BRCA1 mutations. Note that I am also creating a categorical variable to aid in plotting and analysis later. In addition, I'm adding other known risk genes based on data in Norquist et al (2016)[^3].
+
+[^3]: Norquist et al "Inherited Mutations in Women With Ovarian Carcinoma". [(2016) JAMA Oncology 2(4):482--490](http://jamanetwork.com/journals/jamaoncology/fullarticle/2479125).
 
 ```{r msg = FALSE}
 ################### BRCA Muts
-brca1.prob <- 0.025
-brca2.prob <- 0.02
-brca1.OR <- 40
-brca2.OR <- 11
-# start using prevalence instead of #baserate since this is what we really mean
-prevalence <- 0.1
+brca1.prob <- 0.0031
+brca2.prob <- 0.0041
+brca1.OR <- 29
+brca2.OR <- 12.7
+prevalence <- 0.013
 
 ovc_snps <- c("rs7651446", "rs3814113", "rs10088218", "rs9303542", "rs8170", "rs2072590", "rs34289250", 
-              "rs11782652", "rs1243180", "rs11907546", "rs2046210", "rs10069690", "brca1", "brca2")
-ovc_or   <- c(1.59, 1.2658228, 1.2987013, 1.14, 1.19, 1.14, 7.95, 1.24, 1.1, 1.1111112, 1.28, 1.14, brca1.OR, brca2.OR)
-ovc_maf  <- c(0.05, 0.32, 0.13, 0.27, 0.19, 0.68, 0.0089, 0.07, 0.31, .35903, 0.08, 0.26, brca1.prob, brca2.prob)
-prevalence <- 0.013
+              "rs11782652", "rs1243180", "rs11907546", "rs2046210", "rs10069690", 
+              "brca1", "brca2", "brip1", "palb2", "rad51c", "rad51d", "bard1", 
+              "chek2", "atm", "nbn", "tp53", "rad50", "fam174a", "mre11a")
+ovc_or   <- c(1.59, 1.2658228, 1.2987013, 1.14, 1.19, 1.14, 7.95, 1.24, 1.1, 1.1111112, 1.28, 1.14, 
+              brca1.OR, brca2.OR, 6.4, 4.4, 3.4, 10.9, 
+              4.2, 0.4, 2.4, 2.3, 2.9, 0.7, 1.9, 0.8)
+ovc_maf  <- c(0.05, 0.32, 0.13, 0.27, 0.19, 0.68, 0.0089, 0.07, 0.31, .35903, 0.08, 0.26, 
+              brca1.prob, brca2.prob, 0.0017, 0.0011, 0.0011, 0.0004, 0.0005, 
+              0.0082, 0.0022, 0.0014, 0.0011, 0.0024, 0.0008, 0.0007)
+
 
 ovcpts <- pt_genotypes(num_pts, ovc_snps, ovc_maf, effect_size = ovc_or)
 ovcodds <- exp(colSums(log(ovcpts$OR ^ ovcpts[,1:num_pts])))
-gc()
-
-# add a categorical variable to aid in graphical representations for later
 brca.carrier <- rep("NON-BRCA", num_pts)
-brca.carrier[which(ovcpts[13,1:1e5]>0)] <- "BRCA1"
 brca.carrier[which(ovcpts[14,1:1e5]>0)] <- "BRCA2"
+brca.carrier[which(ovcpts[13,1:1e5]>0)] <- "BRCA1" # assign brca1 last in case of overwriting double mutation status
 ```
 
 ### Setup
@@ -355,7 +359,10 @@ nvalid <- length(valid.patients)
 
 ### Age model
 
-I want to explore how risk changes over a persons lifetime, given different genotype backgrounds. To do this I scaled using an exponential function to generate a factor that stays near 0 until the age of about 30 and then starts climbing rapidly to 80. I am using this in place of the linear scalar I used in previous sections; one of its nice properties is that it becomes linear in log space, and thus probably behaves closer to a true biological process.
+I want to explore how risk changes over a persons lifetime, given different genotype backgrounds. 
+
+#### Exponential version
+To do this I scaled using an exponential function to generate a factor that stays near 0 until the age of about 30 and then starts climbing rapidly to 80. I am using this in place of the linear scalar I used in previous sections; one of its nice properties is that it becomes linear in log space, and thus probably behaves closer to a true biological process.
 
 
 ```{r echo = TRUE}
@@ -369,9 +376,31 @@ age.scale <- function(age, onset.age, risk.age) {
   1/risk.age * age^((age-onset.age)/(risk.age-onset.age))
 }
 
-# let's see how this function works
-plot(x=1:80, y=age.scale(1:80, 10, 80), type="l", xlab="age in years")
+plot(x=1:100, y=age.scale(1:100, 20, 80), type='l')
+```
 
+#### Inverse logit version
+
+With the exponential version I was getting a risk multiplier of 41% for age 70 vs 100% at age 80. This doesn't make sense, so I created an inverse_logit function to make a nice S-curve between 0 and 1. I've abandoned the exponential version for now, but I'm keeping the code in this place to document my learning process, and just in case I want to use it again. 
+
+There is already an inverse logit function in the "boot" package, but it is not flexible enough for my needs, so here's my version.
+
+```{r}
+inv_logit <- function(x, scale = 1, slope = 1, shift = 0) {
+  x <- scale * exp(x*slope - shift)/(1+exp(x * slope - shift))
+  for (i in 1:length(x)) {
+    if (is.na(x[i])) {x[i] <- 1}
+  }
+  x
+}
+
+# let's see how the function works:
+plot(x=1:100, y=inv_logit(1:100, shift = 8, slope = 1/7), type='l') 
+```
+
+This function fits my expectations pretty well. By the age of 65 there should be enough accumulated lifetime risk to generate lots of cases. Next I want to see the consequences of different ages on my simulated patient population:
+
+```{r}
 ages <- c(rep(20, nvalid), 
           rep(30, nvalid),
           rep(40, nvalid),
@@ -381,7 +410,7 @@ ages <- c(rep(20, nvalid),
           rep(80, nvalid))
 
 # people with BRCA1 mutations can get sick by age 30, so I'll set the onset age to 15 to allow 10 years for some risk to accumulate
-ovcprobs.brca.age <- rep(ovcprobs.brca[valid.patients],7) * age.scale(ages, 20, 80)
+ovcprobs.brca.age <- rep(ovcprobs.brca[valid.patients],7) * inv_logit(ages, shift = 8, slope = 1/7)
 
 agerisk <- data.frame(age = as.factor(ages), 
                       risk = ovcprobs.brca.age, 
@@ -401,15 +430,15 @@ None currently
 
 # generate cases 'n ctrls from polygenic risk data
 #########################
-ages <- sample(50:80, size = num_pts, replace = TRUE)
-probs <- ovcprobs.brca * age.scale(ages, 20, 80)
-valid.patients <- which(probs * popscale.factor < 1)
-nvalid <- length(valid.patients)
+set.seed(29)
+ages <- sample(40:80, size=num_pts, replace = TRUE)
+probs <- ovcprobs.brca * inv_logit(ages, shift = 8, slope = 1/7)
+probs <- probs[valid.patients]
+
 ovcsick.brca <- matrix(nrow = nvalid, ncol = 100)
-dim(ovcsick.brca)
 
 for (i in 1:nvalid) {
-  ovcsick.brca[i,] <- sample(c(0,1), size=10, prob = c(1-popscale.factor*probs[valid.patients[i]], popscale.factor*probs[valid.patients[i]]), replace = TRUE)
+  ovcsick.brca[i,] <- sample(c(0,1), size=10, prob = c(1-popscale.factor*probs[i], popscale.factor*probs[i]), replace = TRUE)
 }
 
 pick.one <- sample(10, 1)
@@ -417,50 +446,195 @@ pick.one <- sample(10, 1)
 cases <- which(ovcsick.brca[,pick.one]==TRUE)
 length(cases)
 length(cases)/nvalid
-
 probs.scale <- probs * popscale.factor
 
 ctrls <- sample(which(ovcsick.brca[,pick.one]==FALSE), size = length(cases), replace = FALSE)
-ptrisk <- melt(data.frame(ctrls=probs.scale[valid.patients[ctrls]], cases=probs.scale[valid.patients[cases]]))
+ptrisk <- melt(data.frame(ctrls=probs.scale[ctrls], cases=probs.scale[cases]))
 names(ptrisk) <- c("trtgroup", "risk")
 #########################
 
-mean(probs.scale[brca1.carrier[valid.patients]==T])
-mean(probs.scale[brca2.carrier[valid.patients]==T])
-mean(probs.scale[brca1.carrier[valid.patients]==F])
-sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))
+# average risk of BRCA1+ carriers (regardless of status)
+mean(probs.scale[(brca.carrier=="BRCA1")[valid.patients]==TRUE])
+# average risk of BRCA2+ carriers 
+mean(probs.scale[(brca.carrier=="BRCA2")[valid.patients]==TRUE])
+# average risk of non-BRCA
+mean(probs.scale[(brca.carrier=="NON-BRCA")[valid.patients]==TRUE])
+# of cases that are BRCA carriers (see double negative?)
+sum(cases %in% which((brca.carrier=="NON-BRCA")[valid.patients]==FALSE))
+# fraction of cases that are BRCA1+ etc etc
+sum(cases %in% which((brca.carrier=="BRCA1")[valid.patients]==TRUE))/length(cases)
+sum(cases %in% which((brca.carrier=="BRCA2")[valid.patients]==TRUE))/length(cases)
+sum(cases %in% which((brca.carrier=="NON-BRCA")[valid.patients]==TRUE))/length(cases)
 
 # violin plot compare distributin relative risk of cases controls
-ggplot(data=ptrisk, aes(x=trtgroup, y=risk/prevalence, colour=trtgroup, fill=trtgroup)) + geom_violin() + labs(x = "patient population", y = "Relative Risk (RR)")
-
-#ggplot(data=data.frame(or=ovcprobs.brca.age[cases][order(ovcprobs.brca.age[cases])]/ovcprobs.brca.age[ctrls][order(ovcprobs.brca.age[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
-ggplot(data=data.frame(cases=probs.scale[valid.patients[cases]][order(probs.scale[valid.patients[cases]])]/prevalence,
-                       ctrls=probs.scale[valid.patients[ctrls]][order(probs.scale[valid.patients[ctrls]])]/prevalence), 
-       aes(x=ctrls, y=cases)) + 
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() + labs(x = "patient population", y = "Relative Risk (RR)")
+ggplot(data=data.frame(cases=probs.scale[cases][order(probs.scale[cases])]/prevalence, 
+                       ctrls=probs.scale[ctrls][order(probs.scale[ctrls])]/prevalence), aes(x=ctrls, y=cases)) + 
   geom_point() + #xlim(0, 20) + ylim(0, 200) + 
   geom_abline(intercept = 0, slope = 1, colour="red") +
-  geom_hline(yintercept=quantile(probs.scale[valid.patients[cases]]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2) +
-  geom_vline(xintercept=quantile(probs.scale[valid.patients[ctrls]]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2)
+  geom_hline(yintercept=quantile(probs.scale[cases]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2) +
+  geom_vline(xintercept=quantile(probs.scale[ctrls]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2)
 
 
-caseOR <- probs.scale[valid.patients[cases]][order(probs.scale[valid.patients[cases]])]/prevalence
-ctrlOR <- probs.scale[valid.patients[ctrls]][order(probs.scale[valid.patients[ctrls]])]/prevalence
+caseOR <- probs.scale[cases][order(probs.scale[cases])]/prevalence
+ctrlOR <- probs.scale[ctrls][order(probs.scale[ctrls])]/prevalence
+# % of cases OR > 5
+length(which(caseOR>5))
+length(which(caseOR>5))/length(caseOR)
 # slope
 mean(caseOR/ctrlOR)
 
 # prevalence
 length(cases)/nvalid
 # fraction of brca1+ patients that are cases
-sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))/sum(brca1.carrier[valid.patients])
+sum(cases %in% which(brca.carrier[valid.patients]=="BRCA1"))/sum(brca.carrier[valid.patients]=="BRCA1")
 # fraction of cases that are brca1+
-sum(cases %in% which(brca1.carrier[valid.patients]==TRUE))/length(cases)
-# fraction of non-BRCA1 patients that are cases
-sum(cases %in% which(brca1.carrier[valid.patients]==FALSE))/sum(brca1.carrier[valid.patients]==FALSE)
+sum(cases %in% which(brca.carrier[valid.patients]=="BRCA1"))/length(cases)
+# fraction of cases that are non-BRCA
+sum(cases %in% which(brca.carrier[valid.patients]=="NON-BRCA"))/length(cases)
 # fraction of BRCA2 patients that are cases
-sum(cases %in% which(brca2.carrier[valid.patients]==TRUE))/sum(brca2.carrier[valid.patients])
+sum(cases %in% which(brca.carrier[valid.patients]=="BRCA2"))/sum(brca.carrier[valid.patients]=="BRCA2")
 
 ```
 
+## All known mutations in ovarian cancer
+
+This section contains what is basically a duplication of the previous sections, but with a newly obtained dataset of ALL known ovarian SNPs and mutations.
+
+```{r}
+################### BRCA Muts
+prevalence <- 0.013
+
+##                  1              2             3             4              5            6             7              8
+ovc_snps <- c("rs56318008",  "rs58722170", "rs17041869", "rs2072590",   "rs2165109", "rs711830",   "rs752590",    "rs112071820", # A
+              "rs7651446",   "rs9870207",  "rs13113999", "rs17329882",  "rs4691139", "rs10069690", "rs555025179", "rs6456822",   # B 
+              "rs7705526",   "rs10088218", "rs11782652", "rs150293538", "rs9886651", "rs1413299",  "rs200182588", "rs320203",    # C
+              "rs3814113",   "rs635634",   "rs1192691",  "rs1243180",   "rs7902587", "rs7937840",  "rs7953249",   "rs8037137",   # D 
+              "rs199661266", "rs11651755", "rs183211",   "rs757210",    "rs9303542", "rs8098244",  "rs1469713",   "rs4808075",   # E
+              "rs688187",    "rs6005807",  "brca1",      "brca2",       "brip1",     "palb2",      "rad51c",      "rad51d",      # F 
+              "bard1",       "chek2",      "atm",        "nbn",         "tp53",      "rad50",      "fam174a",     "mre11a")      # G
+
+##              1     2     3     4     5     6     7     8
+ovc_or   <- c(1.11, 1.08, 1.06, 1.34, 1.09, 1.14,  1.3, 1.29, # A
+              1.59, 1.19,  1.2, 1.23, 1.09, 1.14, 1.51, 1.18, # B
+              1.07, 1.24, 2.19, 1.23, 1.08, 1.21, 1.53, 1.04, # C
+              1.29, 1.11, 1.11,  1.1, 1.29, 1.05, 1.08, 1.07, # D 
+              1.09,  1.2, 1.11, 1.11, 1.14, 1.19, 1.04, 1.18, # E
+              1.33, 1.17,   29, 12.7,  6.4,  4.4,  3.4, 10.9, # F 
+              4.2,   0.4,  2.4,  2.3,  2.9,  0.7,  1.9,  0.8) # G
+
+##                1         2         3         4         5         6         7         8
+ovc_maf  <- c(0.796725, 0.151757, 0.874002, 0.817492, 0.740016, 0.8185,   0.763778, 0.73722,  # A
+              0.939896, 0.487021, 0.226438, 0.848243, 0.363219, 0.652356, 0.54173,  0.4623,   # B 
+              0.321486, 0.086661, 0.945487, 0.992612, 0.725839, 0.580072, 0.4868,   0.176717, # C
+              0.44389,  0.139776, 0.758387, 0.159545, 0.91893,  0.857628, 0.56889,  0.282348, # D 
+              0.8676,   0.467252, 0.287784, 0.3622,   0.684904, 0.173922, 0.478035, 0.154752, # F 
+              0.358427, 0.886981, 0.0031,   0.0041,   0.0017,   0.0011,   0.0011,   0.0004,   # F
+              0.0005,   0.0082,   0.0022,   0.0014,   0.0011,   0.0024,   0.0008,   0.0007)   # G
+
+
+ovcpts <- pt_genotypes(num_pts, ovc_snps, ovc_maf, effect_size = ovc_or)
+ovcodds <- exp(colSums(log(ovcpts$OR ^ ovcpts[,1:num_pts])))
+gc()
+
+brca.carrier <- rep("NON-BRCA", num_pts)
+brca.carrier[which(ovcpts[14,1:1e5]>0)] <- "BRCA2"
+brca.carrier[which(ovcpts[13,1:1e5]>0)] <- "BRCA1" # assign brca1 last in case of overwriting double mutation status
+
+ovcprobs.brca <- ovcodds 
+popscale.factor <- 2 * prevalence / mean(ovcprobs.brca)
+valid.patients <- which(ovcprobs.brca*popscale.factor < 1)
+
+nvalid <- length(valid.patients)
+
+ages <- c(rep(20, nvalid), 
+          rep(30, nvalid),
+          rep(40, nvalid),
+          rep(50, nvalid),
+          rep(60, nvalid),
+          rep(70, nvalid),
+          rep(80, nvalid))
+
+agerisk <- data.frame(age      = as.factor(ages), 
+                      risk     = rep(ovcprobs.brca[valid.patients], 7),
+                      brca     = as.factor(rep(brca.carrier[valid.patients], 7)),
+                      risk.age = rep(ovcprobs.brca[valid.patients], 7) * inv_logit(ages, shift = 8, slope = 1/7) * popscale.factor)
+
+gc()
+
+
+ggplot(agerisk, aes(x = age, y = risk.age)) + geom_boxplot(aes(fill = brca), notch = TRUE) + labs(y="relative risk (RR)") #+ scale_y_log10()
+
+# generate cases 'n ctrls from polygenic risk data
+#########################
+set.seed(29)
+ages <- sample(40:80, size=num_pts, replace = TRUE)
+probs <- ovcprobs.brca * inv_logit(ages, shift = 8, slope = 1/7)
+probs <- probs[valid.patients]
+
+ovcsick.brca <- matrix(nrow = nvalid, ncol = 100)
+
+for (i in 1:nvalid) {
+  ovcsick.brca[i,] <- sample(c(0,1), size=10, prob = c(1-popscale.factor*probs[i], popscale.factor*probs[i]), replace = TRUE)
+}
+
+pick.one <- sample(10, 1)
+
+cases <- which(ovcsick.brca[,pick.one]==TRUE)
+length(cases)
+length(cases)/nvalid
+probs.scale <- probs * popscale.factor
+
+ctrls <- sample(which(ovcsick.brca[,pick.one]==FALSE), size = length(cases), replace = FALSE)
+ptrisk <- melt(data.frame(ctrls=probs.scale[ctrls], cases=probs.scale[cases]))
+names(ptrisk) <- c("trtgroup", "risk")
+#########################
+
+
+length(probs.scale)
+mean(probs.scale[(brca.carrier=="BRCA1")[valid.patients]==TRUE])
+mean(probs.scale[(brca.carrier=="BRCA2")[valid.patients]==TRUE])
+mean(probs.scale[(brca.carrier=="NON-BRCA")[valid.patients]==TRUE])
+
+# of cases that are BRCA carriers (see double negative?)
+sum(cases %in% which((brca.carrier=="NON-BRCA")[valid.patients]==FALSE))
+
+# fraction of cases that are BRCA1+
+sum(cases %in% which((brca.carrier=="BRCA1")[valid.patients]==TRUE))/length(cases)
+sum(cases %in% which((brca.carrier=="BRCA2")[valid.patients]==TRUE))/length(cases)
+sum(cases %in% which((brca.carrier=="NON-BRCA")[valid.patients]==TRUE))/length(cases)
+
+# violin plot compare distributin relative risk of cases controls
+ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() + labs(x = "patient population", y = "Relative Risk (RR)")
+
+ggplot(data=data.frame(cases=probs.scale[cases][order(probs.scale[cases])]/prevalence, 
+                       ctrls=probs.scale[ctrls][order(probs.scale[ctrls])]/prevalence), aes(x=ctrls, y=cases)) + 
+  geom_point() + #xlim(0, 20) + ylim(0, 200) + 
+  geom_abline(intercept = 0, slope = 1, colour="red") +
+  geom_hline(yintercept=quantile(probs.scale[cases]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2) +
+  geom_vline(xintercept=quantile(probs.scale[ctrls]/prevalence, probs=c(.5,.95,.99)), colour="grey", lty=2)
+
+
+caseOR <- probs.scale[cases][order(probs.scale[cases])]/prevalence
+ctrlOR <- probs.scale[ctrls][order(probs.scale[ctrls])]/prevalence
+# % of cases OR > 5
+length(which(caseOR>5))
+length(which(caseOR>5))/length(caseOR)
+# slope
+mean(caseOR/ctrlOR)
+
+# prevalence
+length(cases)/nvalid
+# fraction of brca1 patients that are cases
+sum(cases %in% which(brca.carrier[valid.patients]=="BRCA1"))/sum(brca.carrier[valid.patients]=="BRCA1")
+# fraction of BRCA2 patients that are cases
+sum(cases %in% which(brca.carrier[valid.patients]=="BRCA2"))/sum(brca.carrier[valid.patients]=="BRCA2")
+# fraction of cases that are brca1+
+sum(cases %in% which(brca.carrier[valid.patients]=="BRCA1"))/length(cases)
+# fraction of cases that are non-BRCA
+sum(cases %in% which(brca.carrier[valid.patients]=="NON-BRCA"))/length(cases)
+
+```
 
 # Stan Model
 
