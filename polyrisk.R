@@ -1,9 +1,12 @@
 setwd("~/Desktop/projects/polyrisk")
 library("rstan")
 library("ggplot2")
-library("reshape2")
-
-
+library("ggridges")
+library("tidyr")
+library("dplyr")
+library("doParallel")
+registerDoParallel(cores = 16)
+source("https://bioconductor.org/biocLite.R")
 
 genotype_prob <- function(maf) {
   #hardy-weinberg model
@@ -16,81 +19,164 @@ genotype_prob <- function(maf) {
 
 
 pt_genotypes <- function(num_pts, snp_ids, my_p, effect_size) {
+  # This function simulates a population of patients from pop. variant stats
+  # num_pts = number of patients to simulate
+  # snp_ids
+  # my_p = minor allele prob of snps
+  # effect_size = odds ratio (OR)
   genotype_mat <- matrix(NA, length(snp_ids), num_pts)
   for (i in 1:length(snp_ids)) {
     genotype_mat[i,] <- sample(c(0,1,2), size = num_pts, prob = genotype_prob(my_p[i]), replace = T)
   }
-  genotype_mat <- data.frame(genotype_mat, maf=my_p, row.names = snp_ids, OR = effect_size)
+  genotype_mat <- data.frame(genotype_mat, maf=my_p, row.names = snp_ids, RR = effect_size)
   genotype_mat
 }
 
-#plot(density(rgamma(1000,shape = .3,rate = 1)))
-#plot(density(1+abs(rnorm(num_pts, 0, 0.2))))
 
-
-# parameter block
+# parameter block for simulations
 ##################
-num_pts <- 100000
-num_snps <- 25
+num_pts <- 500000
+num_snps <- 20
 maf_sd <- 0.3 # standard dev for normal dist of minor allele freq
-effect_size <- 1 + abs(rnorm(num_snps, 0, 0.2))
-baserate <- 0.001
-ages <- rnorm(num_pts, 65, 3)
-#ages <- rep(65, num_pts)
-hist(ages)
+maf <- signif( abs(rnorm(num_snps, 0, maf_sd)), digits=2)
+effect_size <- 1 + abs(rnorm(num_snps, 0, 0.4))
+baserate <- 1/100
 ##################
 
-pts <- pt_genotypes(num_pts, paste(rep("rs", num_snps), sample(5e8, size=num_snps, replace = F), sep=""), 
-                    signif( abs(rnorm(num_snps, 0, maf_sd)), digits=2),
-                    effect_size = effect_size)
-
-mean(pts$OR)
-mean(pts$maf)
+pts <- pt_genotypes(num_pts, paste("rs", 1:num_snps, sep = ''), 
+                    maf,
+                    effect_size)
 
 
-ptodds <- exp(colSums(log(pts$OR ^ pts[,1:num_pts])))
+ptodds <- foreach (i=1:num_pts, .combine = c) %dopar% {sum(log(pts$RR ^ pts[,i]))}
 ptprobs <- ptodds * baserate
-
-
-which(ptprobs.age > 1)
-mean(ptprobs)
-ptprobs.age <- ptprobs/65 * ages
-plot(density(ptprobs.age))
-
-gc()
-
+plot(density(ptprobs))
 # generate cases 'n ctrls from polygenic risk data
 #########################
 sick <- numeric(num_pts)
-set.seed(1234)
+set.seed(4211)
 for (i in 1:num_pts) {
-  sick[i] <- sample(c(0,1), size=1, prob = c(1-ptprobs.age[i], ptprobs.age[i]))
+  sick[i] <- sample(c(0,1), size=1, prob = c(1-ptprobs[i], ptprobs[i]))
 }
 cases <- which(sick==TRUE)
+
 length(cases)
+
 ctrls <- sample(which(sick==FALSE), size = length(cases), replace = FALSE)
-ptrisk <- melt(data.frame(ctrls=ptprobs[ctrls], cases=ptprobs[cases]))
-names(ptrisk) <- c("trtgroup", "risk")
+#ctrls <- which(sick==FALSE)
+ptrisk <- data.frame(trtgroup = c(rep("ctrls", length(ctrls)), rep("cases", length(cases))),
+                     risk = c(ptprobs[ctrls], ptprobs[cases]))
+head(ptrisk)
 #########################
+
+OR <- rowSums(pts[,cases])*length(ctrls)/(length(cases)*rowSums(pts[,ctrls]))
+with(ptrisk, plot(risk ~ as.factor(trtgroup)))
+
+res <- data.frame(OR=OR, RR=pts$RR)
+ggplot(data=res, aes(x=OR, y=RR)) + 
+  geom_point() + xlim(1,2) + ylim(1,2)
 
 # violin plot compare distributin relative risk of cases controls
 ggplot(data=ptrisk, aes(x=trtgroup, y=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_violin() 
-#ggplot(data=data.frame(or=ptprobs[cases][order(ptprobs[cases])]/ptprobs[ctrls][order(ptprobs[ctrls])]), aes(x=or)) + geom_density(fill="grey", colour="grey")
-pdf("mod_af_mod_eff_age.pdf")
-ggplot(data=data.frame(cases=ptprobs[cases][order(ptprobs[cases])]/baserate, ctrls=ptprobs[ctrls][order(ptprobs[ctrls])]/baserate), aes(x=ctrls, y=cases)) + 
-  geom_point() + #xlim(0, 100) + ylim(0, 100) + 
-  geom_abline(intercept = 0, slope = 1, colour="red")
-dev.off()
+ggplot(data=ptrisk, aes(y=trtgroup, x=risk/baserate, colour=trtgroup, fill=trtgroup)) + geom_density_ridges() 
 
-?sample
 
-caseOR <- ptprobs[cases][order(ptprobs[cases])]/baserate
-ctrlOR <- ptprobs[ctrls][order(ptprobs[ctrls])]/baserate
-# % of cases OR > 5
-length(which(caseOR>5))
-length(which(caseOR>5))/length(caseOR)
-# slope
-mean(caseOR/ctrlOR)
+sim_data1 <- list(nsnps = num_snps,
+                  npts  = 2*length(cases),
+                  genotypes = pts[,c(cases, ctrls)],
+                  sick  = sick[c(cases, ctrls)])
+
+additive_model = "
+functions {
+  real foo_lpdf(real x) {
+    return -2*log(x);
+  }
+}
+data {
+  int<lower=1> nsnps;
+  int<lower=1> npts;
+  matrix<lower=0, upper=2>[nsnps, npts] genotypes;
+  int<lower=0, upper=1> sick[npts];
+}
+parameters{
+  real<lower=1, upper=3> risk_ratio[nsnps];
+  real<lower=0, upper=1> baserate; 
+}
+//transformed parameters {
+//  real<lower=0> ptrisk[npts];
+//  row_vector[nsnps] snprisk[npts];
+//  for (i in 1:nsnps) {
+//    for (j in 1:npts) {
+//      snprisk[j, i] = risk_ratio[i] ^ genotypes[i, j];
+//    }
+//  }
+//  for (j in 1:npts) {
+//    ptrisk[j] = log_sum_exp(snprisk[j]);
+//  }
+//}
+model {
+  // prior
+  for (i in 1:nsnps) {
+    risk_ratio[i] ~ foo();
+  }
+  baserate ~ beta(1, 100);
+  // likelihood
+  for (i in 1:npts) {
+    //sick[i] ~ bernoulli(ptrisk[i] * baserate);
+    for (j in 1:nsnps) {
+      sick[i] ~ bernoulli(risk_ratio[j] ^ genotypes[j, i] * baserate);
+    }
+  }
+}
+"
+
+
+
+#plot(density(rbeta(10000, 1, 100)), xlim=c(0,1))
+inits1 <- list(list(odds_ratio=rep(1.1, 10), baserate=0.001))
+
+inits4 <- list(list(odds_ratio=rep(1.1, 10), baserate=0.001),
+               list(odds_ratio=rep(1.1, 10), baserate=0.001),
+               list(odds_ratio=rep(1.1, 10), baserate=0.001),
+               list(odds_ratio=rep(1.1, 10), baserate=0.001))
+
+fit1 <- stan_model(model_code = additive_model)
+
+gc()
+
+
+a <- cbind(pts[,c("maf", "OR")], pred_RR=colMeans(foo$risk_ratio))
+a <- mutate(a, err = OR-pred_RR)
+a$joint_model <- colMeans(foo1$risk_ratio)
+a <- mutate(a, err_joint = OR-joint_model)
+plot(density(a$err_joint))
+
+f1 <- stan(fit = fit1, 
+           model_code = additive_model, 
+           data = sim_data1,
+           init = inits4,
+           iter = 10000,
+           warmup = 5000,
+           thin = 50,
+           chains = 4,
+           control = list(adapt_delta=0.94,
+                          max_treedepth=12))
+
+
+foo1 <- rstan::extract(f1)
+#bar <- get_inits(f1)
+summary(foo)
+save(foo, foo1, pts, ptodds, file="joint_posterior.rda")
+
+plot(x=colMeans(foo$risk_ratio), y=pts$RR, col="red")#, xlim=c(1,3), ylim=c(1,3))
+points(x=colMeans(foo$risk_ratio), y=pts$RR, col="blue")
+plot(density(foo$baserate))
+(1.1^-2)^10
+
+
+rrs <- gather(as.data.frame(foo$risk_ratio))
+ggplot(data=rrs, aes(x=value, y=key)) + 
+  geom_density_ridges() 
 
 
 ################### OVARIAN CANCER
